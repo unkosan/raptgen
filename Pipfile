@@ -3,6 +3,11 @@ url = "https://pypi.org/simple"
 verify_ssl = true
 name = "pypi"
 
+[[source]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu101"
+verify_ssl = false
+
 [packages]
 raptgen = {editable = true, path = "."}
 click = "==7.1.2"
@@ -11,8 +16,9 @@ tqdm = "==4.41.1"
 matplotlib = "==3.1.2"
 pandas = "==1.1.5"
 numpy = "==1.18.1"
-torch = "==1.5.0"
-torchvision = "==0.6.0"
+torch = {index = "pytorch", version = "==1.7.1+cu101"}
+torchvision = {index = "pytorch", version = "==0.8.2+cu101"}
+torchaudio = "==0.7.2"
 svgwrite = "==1.4"
 scipy = "==1.4.0"
 GPy = "==1.9.9"
