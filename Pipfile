@@ -24,6 +24,7 @@ scipy = "==1.4.0"
 GPy = "==1.9.9"
 GPyOpt = "==1.2.6"
 CairoSVG = "==2.5.1"
+ipykernel = "==6.4.1"
 
 [dev-packages]
 
