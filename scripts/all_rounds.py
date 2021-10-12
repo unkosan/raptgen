@@ -18,9 +18,9 @@ default_path = str(Path(f"{dir_path}/../out/gmm").resolve())
 
 @click.command(help='Obtains mean latent vectors of sequences for single and all rounds, applies Gaussian mixture models of specified number of classes to all rounds latent data, and for each of single round data, calculates the probabilties of belonging to each class. these mean vectors and probabilities are stored as csv under --save-dir directory.',
                     context_settings=dict(show_default=True))
-@click.argument("all-rounds-seq-path",
+@click.argument("all-round-path",
                     type=click.Path(exists = True))
-@click.argument("round-seq-path",
+@click.argument("seq-path",
                     type=click.Path(exists = True))
 @click.argument("model-path",
                     type=click.Path(exists = True))
@@ -31,8 +31,12 @@ default_path = str(Path(f"{dir_path}/../out/gmm").resolve())
 @click.option("--cuda-id",
                   help    = "the device id of cuda to run",
                   type    = int, default = 0)
-@click.option("--save-dir",
-                  help    = "path to save results",
+@click.option("--gmm-save-dir",
+                  help    = "path to save the gmm model and probs of seqs in each round",
+                  type    = click.Path(),
+                  default = default_path)
+@click.option("--latent-save-dir",
+                  help    = "path to save latent mean vectors of seqs in each round",
                   type    = click.Path(),
                   default = default_path)
 @click.option("--fwd",
@@ -43,22 +47,25 @@ default_path = str(Path(f"{dir_path}/../out/gmm").resolve())
                   help    = "reverse adapter",
                   type    = str,
                   default = None)
-@click.option("--num-class",
+@click.option("--num-components",
                   help    = "the number of class the Gaussian mixture model has",
                   type    = int,
                   default = 10)
-def main(all_round_path, seq_path, model_path, cuda_id, use_cuda, save_dir, fwd, rev, num_components):
+def main(all_round_path, seq_path, model_path, cuda_id, use_cuda, gmm_save_dir, latent_save_dir, fwd, rev, num_components):
     # get "all_rounds.py"-specific logger
     logger = logging.getLogger(__name__)
     
-    # make a directory to save csv and params of pytorch-model available
-    logger.info(f"opening saving directory: {save_dir}")
-    save_dir = Path(save_dir).expanduser()
-    save_dir.mkdir(exist_ok = True, parents=True)
+    # make a directory to save csv and gmm-model available
+    logger.info(f"opening saving directory: {gmm_save_dir}")
+    gmm_save_dir = Path(gmm_save_dir).expanduser().resolve()
+    gmm_save_dir.mkdir(exist_ok = True, parents=True)
+    logger.info(f"opening saving directory: {latent_save_dir}")
+    latent_save_dir = Path(latent_save_dir).expanduser().resolve()
+    latent_save_dir.mkdir(exist_ok = True, parents=True)
 
     # initialization of SingleRound class does not run the model, just loads sequences from path or as raw argments.
     experiment = SingleRound(
-        path            = all_round_path,
+        path            = str(Path(all_round_path).expanduser().resolve()),
         forward_adapter = fwd,
         reverse_adapter = rev
     )
@@ -71,44 +78,45 @@ def main(all_round_path, seq_path, model_path, cuda_id, use_cuda, save_dir, fwd,
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     # get result instance of "all_rounds"
-    result = Result(
+    sround_result = Result(
         model,
         experiment           = experiment,
-        path_to_save_results = save_dir,
+        path_to_save_results = gmm_save_dir,
         load_if_exists       = True
     )
 
     # calc every mu vectors of probablistic function in latent space from the sequence data
     logger.info(f"calculating mean vectors of latent pdf defined by each SELEX reads")
-    result.get_mean_vectors_from_experiment(get_raw_seq=False)
-    if not Path(f"{save_dir}/all_rounds_latent.csv").exists():
-        np.savetxt(f"{save_dir}/all_rounds_latent.csv", result.mus, delimiter=',')
+    sround_result.get_mean_vectors_from_experiment(get_raw_seq=False)
+    if not Path(f"{latent_save_dir}/all_rounds_latent.csv").exists():
+        np.savetxt(f"{latent_save_dir}/all_rounds_latent.csv", sround_result.mus, delimiter=',')
     
     # restore gmm model from "gmm.pkl", or calculate each var and mean of Gaussian mixuture.
     # caution: if a gmm.pkl exists in "save_dir", discards the value of "num_class" and gets the gmm model from the gmm.pkl
-    result.calc_gmm(dim = num_components)
+    sround_result.calc_gmm(dim = num_components)
     logger.info(f"loading calculated GMM")
-    gmm_model: GaussianMixture = result.gmm
+    gmm_model: GaussianMixture = sround_result.gmm
 
     
     ## GMM MODEL, CNN-pHMM-VAE MODEL LOADED
     
 
-    if not Path(f"{save_dir}/{Path(seq_path).stem}").exists():
+    if not ( Path(f"{latent_save_dir}/{Path(seq_path).stem}.csv").exists() 
+             and Path(f"{gmm_save_dir}/{Path(seq_path).stem}_probs.csv").exists() ):
     # each probability of classes are predicted here
         result = Result(
             model,
             experiment           = SingleRound( path            = seq_path,
                                                 forward_adapter = fwd,
                                                 reverse_adapter = rev ),
-            path_to_save_results = save_dir,
+            path_to_save_results = gmm_save_dir,
             load_if_exists       = True
         )
         logger.info(f"predicting each probabilities of {num_components} classes for single round reads")
         latent_seqs_mus_single_round = result.get_mean_vectors_from_experiment()
         X_probs: np.ndarray = gmm_model.predict_proba(latent_seqs_mus_single_round)
-        np.savetxt(f"{save_dir}/{Path(seq_path).stem}.csv", latent_seqs_mus_single_round, delimiter=',')
-        np.savetxt(f"{save_dir}/{Path(seq_path).stem}_probs.csv", X_probs, delimiter=',')
+        np.savetxt(f"{latent_save_dir}/{Path(seq_path).stem}.csv", latent_seqs_mus_single_round, delimiter=',')
+        np.savetxt(f"{gmm_save_dir}/{Path(seq_path).stem}_probs.csv", X_probs, delimiter=',')
     
     logger.info(f"finished")
 
