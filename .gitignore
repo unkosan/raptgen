@@ -10,3 +10,6 @@ Pipfile.lock
 **/scripts_local
 **/*.sif
 **/.DS_Store
+*.vscode
+*.sh
+logs/**
