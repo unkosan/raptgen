@@ -1,4 +1,4 @@
-from typing import Callable, Tuple
+from typing import Callable, Tuple, List
 import GPy
 import matplotlib as mpl
 from matplotlib.collections import PathCollection
@@ -50,15 +50,28 @@ def plotEllipse(ax:     plt.Axes,
 
     return ax
 
-def makeSelexData(single_round_csv_name_gen: Callable,
-                  range: list) -> dict:
+def loadSelexData(single_round_csv_name_gen: Callable,
+                  range: List[int],
+                  min_counts: int or None = None) -> dict:
     data = dict()
     for i in range:
         data[f"{i} round"] = np.loadtxt(fname = str(single_round_csv_name_gen(i)),
                                         delimiter=",")
+    
+    if min_counts != None:
+        all_round = np.concatenate(list(data.values()), axis=0)
+
+        all_round, counts = np.unique(all_round, axis=0, return_counts=True)
+        filtered_points = all_round[counts >= min_counts]
+        for i in range:
+            boolean_map = tuple([(data[f"{i} round"][j] == filtered_points).all(axis=1).any()
+                        for j in np.arange(data[f"{i} round"].shape[0])])
+            boolean_map = np.array(boolean_map, dtype=bool)
+            data[f"{i} round"] = data[f"{i} round"][boolean_map]
+        
     return data
 
-def makeProbSums(single_round_probs_csv_name_gen: Callable,
+def loadProbSums(single_round_probs_csv_name_gen: Callable,
                  range: list) -> dict:
     probs_sum = dict()
     for i in range:
@@ -69,7 +82,7 @@ def makeProbSums(single_round_probs_csv_name_gen: Callable,
     
     return probs_sum
 
-def makeResult(all_fastq_path: Path,
+def loadResult(all_fastq_path: Path,
                vae_model_path: Path,
                device: str = "cuda:3") -> Result:
     """info: This function will take few minutes"""
@@ -92,7 +105,7 @@ def makeResult(all_fastq_path: Path,
     )
     return result
 
-def makeMeasuredData(result: Result,
+def loadMeasuredData(result: Result,
                      bind_csv_path: Path) -> Tuple[np.ndarray, np.ndarray]:
     coords = list()
     scores = list()
@@ -127,7 +140,7 @@ def plotReadsAllRound(selex_data: dict,
         plotReads(axes = ax, label = key, data = value, color = color)
     return figure
 
-def makeGMM(gmm_model_path: Path) -> GaussianMixture:
+def loadGMM(gmm_model_path: Path) -> GaussianMixture:
     with gmm_model_path.open("rb") as f:
         gmm = pickle.load(f)
     return gmm
