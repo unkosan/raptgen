@@ -52,23 +52,12 @@ def plotEllipse(ax:     plt.Axes,
 
 def loadSelexData(single_round_csv_name_gen: Callable,
                   range: List[int],
-                  min_counts: int or None = None) -> dict:
+                  ) -> dict:
     data = dict()
     for i in range:
         data[f"{i} round"] = np.loadtxt(fname = str(single_round_csv_name_gen(i)),
                                         delimiter=",")
     
-    if min_counts != None:
-        all_round = np.concatenate(list(data.values()), axis=0)
-
-        all_round, counts = np.unique(all_round, axis=0, return_counts=True)
-        filtered_points = all_round[counts >= min_counts]
-        for i in range:
-            boolean_map = tuple([(data[f"{i} round"][j] == filtered_points).all(axis=1).any()
-                        for j in np.arange(data[f"{i} round"].shape[0])])
-            boolean_map = np.array(boolean_map, dtype=bool)
-            data[f"{i} round"] = data[f"{i} round"][boolean_map]
-        
     return data
 
 def loadProbSums(single_round_probs_csv_name_gen: Callable,
