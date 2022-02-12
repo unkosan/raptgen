@@ -486,11 +486,32 @@ def read_SELEX_data(
     -------
     result_df : pandas.DataFrame
         `filepath` に示された HT-SELEX データ内の各 read の情報を `ID`, `Sequence` のカラムでまとめた `DataFrame` を返却する。
+    
+    Examples
+    --------
+    >>> df = read_SELEX_data("data/real/A_4R.fastq", "fastq")
+    >>> df.head()
+                      ID                                           Sequence
+    0  E08OS:00004:00015  TAATACGACTCACTATAGGGAGCAGGAGAGAGGTCAGATGACGGGG...
+    1  E08OS:00004:00033  TAATACGACTCACTATAGGGAGCAGGAGAGAGGTCAGATGAACAAG...
+    2  E08OS:00005:00031  TAATACGACTCACTATAGGGAGCAGGAGAGAGGTCAGATGAACGGA...
+    3  E08OS:00006:00033  TAATACGACTCACTATAGGGAGCAGGAGAGAGGTCAGATGTACATT...
+    4  E08OS:00006:00037  TAATACGACTCACTATAGGGAGCAGGAGAGAGGTCAGATGTCAGAG...
+    >>> df = read_SELEX_data("data/real/A_4R.fastq", "fastq", is_biopython_format = True)
+    >>> df.head()
+                      ID                                           Sequence
+    0  E08OS:00004:00015  (T, A, A, T, A, C, G, A, C, T, C, A, C, T, A, ...
+    1  E08OS:00004:00033  (T, A, A, T, A, C, G, A, C, T, C, A, C, T, A, ...
+    2  E08OS:00005:00031  (T, A, A, T, A, C, G, A, C, T, C, A, C, T, A, ...
+    3  E08OS:00006:00033  (T, A, A, T, A, C, G, A, C, T, C, A, C, T, A, ...
+    4  E08OS:00006:00037  (T, A, A, T, A, C, G, A, C, T, C, A, C, T, A, ...
+    >>> type(df["Sequence"][0])
+    <class 'Bio.Seq.Seq'>
     """
     path = Path(filepath)
     seq_ID_list = list()
     seq_list = list()
-    with path.open("w") as handle:
+    with path.open("r") as handle:
         for record in SeqIO.parse(handle, filetype):
             seq_ID_list.append(record.id)
             if is_biopython_format == True: 
