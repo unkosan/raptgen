@@ -1,5 +1,6 @@
 from enum import IntEnum, Enum
 import math
+from typing import Callable
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -789,6 +790,8 @@ class DecoderRNN (nn.Module):
 
 
 class VAE(nn.Module):
+    loss_fn: Callable
+
     def __init__(self, encoder, decoder, embed_size=10, hidden_size=32):
         super(VAE, self).__init__()
 
