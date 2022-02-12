@@ -7,3 +7,6 @@ out/**
 **/.log
 Pipfile.lock
 .vscode/settings.json
+
+scripts_local/
+**/.DS_Store
