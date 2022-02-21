@@ -12,7 +12,7 @@ import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.dataset import TensorDataset
-from raptgen.models import VAE, ce_loss, profile_hmm_loss_fn, profile_hmm_loss_fn_fast
+from raptgen.core.algorithms import VAE, profile_hmm_vae_loss
 
 # seed 値の固定は https://qiita.com/north_redwing/items/1e153139125d37829d2d を参照した。
 # 英文では https://pytorch.org/docs/stable/notes/randomness.html が相当する。
@@ -36,6 +36,7 @@ def set_seed(seed: int):
     -------
     None
     """
+    global _seed_exists, _seed
     _seed_exists = True
     _seed = seed
     random.seed(seed)
@@ -146,7 +147,7 @@ def train_VAE(
     num_epochs : int
         トレーニングデータの学習を打ち切る最大回数。
     model : VAE
-        学習させる `torch.nn.Modules` 由来の VAE モデル。
+        学習させる `VAE(torch.nn.Modules)` 型由来の VAE モデル。
     train_loader : DataLoader[torch.Tensor]
         トレーニングデータを格納した DataLoader。
     test_loader : DataLoader[torch.Tensor]
@@ -197,11 +198,15 @@ def train_VAE(
                 batch = batch.to_device(device)
                 optimizer.zero_grad()
                 
-                if (loss_fn in { profile_hmm_loss_fn, profile_hmm_loss_fn_fast }
-                    and epoch <= force_epochs):
+                if (loss_fn == profile_hmm_vae_loss and epoch <= force_epochs):
+                    reconst_params, mus, logvars = model(batch)
+                    transition_probs, emission_probs = reconst_params
                     loss: torch.Tensor = loss_fn(
-                        batch,
-                        *model(batch),
+                        batch_input = batch,
+                        transition_probs = transition_probs,
+                        emission_probs = emission_probs,
+                        mus = mus,
+                        logvars = logvars,
                         beta = beta,
                         force_matching = force_matching,
                         match_cost = 1 + 4 * (1 - epoch / force_epochs)
@@ -229,14 +234,28 @@ def train_VAE(
                 for batch in test_loader:
                     batch = batch.to(device)
 
-                    ce, kld = loss_fn(
-                        batch,
-                        *model(batch),
-                        beta = beta,
-                        test = True,
-                    )
-                    test_ce += ce * batch.shape[0]
-                    test_kld += kld * batch.shape[0]
+                    if loss_fn == profile_hmm_vae_loss:
+                        reconst_params, mus, logvars = model(batch)
+                        transition_probs, emission_probs = reconst_params
+                        ce, kld = loss_fn(
+                            batch_input = batch,
+                            transition_probs = transition_probs,
+                            emission_probs = emission_probs,
+                            mus = mus,
+                            logvars = logvars,
+                            split_ce_kld = True
+                        )
+                        test_ce += ce.item() * batch.shape[0]
+                        test_kld += kld.item() * batch.shape[0]
+                    else:
+                        ce, kld = loss_fn(
+                            batch,
+                            *model(batch),
+                            beta = beta,
+                            test = True,
+                        )
+                        test_ce += ce * batch.shape[0]
+                        test_kld += kld * batch.shape[0]
 
                 test_kld /= len(test_loader.dataset)
                 test_ce /= len(test_loader.dataset)
