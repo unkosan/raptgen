@@ -93,6 +93,8 @@ def get_dataloader(
         ndarray_data, test_size=test_size, shuffle=train_test_shuffle)
     train_data = TensorDataset(torch.from_numpy(train_data).long())
     test_data = TensorDataset(torch.from_numpy(test_data).long())
+    # TensorDataset を使った際，next(iter(dataloader)) からタプルが発生することに注意。
+    # TensorDataset の引数に Tensor を追加することで教師情報も取り出せるが，VAE は教師無しなので使わない。
 
     if use_cuda == True:
         kwargs['num_workers'] = num_workers
@@ -200,8 +202,9 @@ def train_VAE(
                 test_kld = 0
                 test_ce = 0
 
-                for batch in train_loader:
-                    batch = batch.to_device(device)
+                # train_loader からはタプルが渡されることに注意。
+                for batch, in train_loader:
+                    batch = batch.to(device)
                     optimizer.zero_grad()
                     
                     if (loss_fn == profile_hmm_vae_loss and epoch <= force_epochs):
@@ -239,7 +242,7 @@ def train_VAE(
                 model.eval()
                 
                 with torch.no_grad():
-                    for batch in test_loader:
+                    for batch, in test_loader:
                         batch = batch.to(device)
 
                         if loss_fn == profile_hmm_vae_loss:
