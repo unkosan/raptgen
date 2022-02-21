@@ -7,12 +7,12 @@ from typing import Callable, OrderedDict, Tuple, Type
 import random
 import numpy as np
 import pandas as pd
-from path import Path
 import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.dataset import TensorDataset
 from raptgen.core.algorithms import VAE, profile_hmm_vae_loss
+from tqdm.auto import tqdm
 
 # seed 値の固定は https://qiita.com/north_redwing/items/1e153139125d37829d2d を参照した。
 # 英文では https://pytorch.org/docs/stable/notes/randomness.html が相当する。
@@ -133,6 +133,7 @@ def train_VAE(
     beta_threshold: int = 20,
     force_matching: bool = False,
     force_epochs: int = 20,
+    show_tqdm: bool = True,
     ) -> Tuple[torch.nn.Module, pd.DataFrame]:
     """`train_loader` に示されるトレーニングデータを使用して，`model` で示される任意の VAE モデルをトレーニングする。
     `train_loader` 内の各データは `model` の `self.forward()` 関数の引数に投入され，返り値は `self.loss_fn` の引数に投入される。これにより損失量が計算され，逆誤差伝搬された後 `optimizer` で各パラメータが最適化される。
@@ -168,6 +169,8 @@ def train_VAE(
         `True` 時，最初の `force_epochs` 回の epoch において state transition regularization を行う。
     force_epochs : int, default = 20
         `force_matching` を参照。
+    show_tqdm : bool, default = True
+        tqdm を表示するかを決める。
     
     Returns
     -------
@@ -186,102 +189,115 @@ def train_VAE(
         loss_fn = model.loss_fn
     
     try:
-        for epoch in range(1, num_epochs + 1):
-            if beta_schedule and epoch < beta_threshold:
-                beta = epoch / beta_threshold
-            model.train()
-            train_loss = 0
-            test_kld = 0
-            test_ce = 0
+        with tqdm(total = num_epochs, disable = not show_tqdm) as pbar:
+            description = ""
 
-            for batch in train_loader:
-                batch = batch.to_device(device)
-                optimizer.zero_grad()
-                
-                if (loss_fn == profile_hmm_vae_loss and epoch <= force_epochs):
-                    reconst_params, mus, logvars = model(batch)
-                    transition_probs, emission_probs = reconst_params
-                    loss: torch.Tensor = loss_fn(
-                        batch_input = batch,
-                        transition_probs = transition_probs,
-                        emission_probs = emission_probs,
-                        mus = mus,
-                        logvars = logvars,
-                        beta = beta,
-                        force_matching = force_matching,
-                        match_cost = 1 + 4 * (1 - epoch / force_epochs)
-                    )
-                else:
-                    loss: torch.Tensor = loss_fn(
-                        batch,
-                        *model(batch),
-                        beta = beta
-                    )
-                loss.backward()
-                train_loss += loss.item() * int(batch.shape[0])
-                # 損失関数はバッチ内で平均している。バッチ要素数をかけてバッチ毎の総損失量を計算。
+            for epoch in range(1, num_epochs + 1):
+                if beta_schedule and epoch < beta_threshold:
+                    beta = epoch / beta_threshold
+                model.train()
+                train_loss = 0
+                test_kld = 0
+                test_ce = 0
 
-                optimizer.step()
-            
-            train_loss /= len(train_loader.dataset)
-            # pylance がエラー発しているように，dataset 自体には __len__ は定義されているかどうか分からない（抽象クラス時点では定義されていない）。定義されている前提で進める。
-            # train_loss は dataset を構成する塩基配列（各データ点）の平均損失値になる。
-
-            if train_loss == np.nan:
-                raise Exception("NaN value appeared in calculating loss function")
-            
-            with torch.no_grad():
-                for batch in test_loader:
-                    batch = batch.to(device)
-
-                    if loss_fn == profile_hmm_vae_loss:
+                for batch in train_loader:
+                    batch = batch.to_device(device)
+                    optimizer.zero_grad()
+                    
+                    if (loss_fn == profile_hmm_vae_loss and epoch <= force_epochs):
                         reconst_params, mus, logvars = model(batch)
                         transition_probs, emission_probs = reconst_params
-                        ce, kld = loss_fn(
+                        loss: torch.Tensor = loss_fn(
                             batch_input = batch,
                             transition_probs = transition_probs,
                             emission_probs = emission_probs,
                             mus = mus,
                             logvars = logvars,
-                            split_ce_kld = True
+                            beta = beta,
+                            force_matching = force_matching,
+                            match_cost = 1 + 4 * (1 - epoch / force_epochs)
                         )
-                        test_ce += ce.item() * batch.shape[0]
-                        test_kld += kld.item() * batch.shape[0]
                     else:
-                        ce, kld = loss_fn(
+                        loss: torch.Tensor = loss_fn(
                             batch,
                             *model(batch),
-                            beta = beta,
-                            test = True,
+                            beta = beta
                         )
-                        test_ce += ce * batch.shape[0]
-                        test_kld += kld * batch.shape[0]
+                    loss.backward()
+                    train_loss += loss.item() * int(batch.shape[0])
+                    # 損失関数はバッチ内で平均している。バッチ要素数をかけてバッチ毎の総損失量を計算。
 
-                test_kld /= len(test_loader.dataset)
-                test_ce /= len(test_loader.dataset)
-                # Dataset の抽象クラスには __len__ は定義されていないので pylance に怒られている。
+                    optimizer.step()
+                
+                train_loss /= len(train_loader.dataset)
+                # pylance がエラー発しているように，dataset 自体には __len__ は定義されているかどうか分からない（抽象クラス時点では定義されていない）。定義されている前提で進める。
+                # train_loss は dataset を構成する塩基配列（各データ点）の平均損失値になる。
 
-            test_loss = test_kld + test_ce
+                if train_loss == np.nan:
+                    raise Exception("NaN value appeared in calculating loss function")
+                
+                model.eval()
+                
+                with torch.no_grad():
+                    for batch in test_loader:
+                        batch = batch.to(device)
 
-            if test_loss == np.nan:
-                raise Exception("NaN value appeared in calculating loss function")
-            
-            train_loss_list.append(train_loss)
-            test_loss_list.append(test_loss)
-            kld_loss_list.append(test_kld)
-            ce_loss_list.append(test_ce)
+                        if loss_fn == profile_hmm_vae_loss:
+                            reconst_params, mus, logvars = model(batch)
+                            transition_probs, emission_probs = reconst_params
+                            ce, kld = loss_fn(
+                                batch_input = batch,
+                                transition_probs = transition_probs,
+                                emission_probs = emission_probs,
+                                mus = mus,
+                                logvars = logvars,
+                                split_ce_kld = True
+                            )
+                            test_ce += ce.item() * batch.shape[0]
+                            test_kld += kld.item() * batch.shape[0]
+                        else:
+                            ce, kld = loss_fn(
+                                batch,
+                                *model(batch),
+                                beta = beta,
+                                test = True,
+                            )
+                            test_ce += ce * batch.shape[0]
+                            test_kld += kld * batch.shape[0]
 
-            # 終了条件
-            #   テストデータの最小損失量の未更新が early_stop_threshold 回連続した時早期終了。
-            #   または，未更新回数が early_stop_threshold 以下のまま全 epoch が終了。
-            if np.min(test_loss_list) == test_loss:
-                patience = 0
-                best_model_state_dict = model.state_dict()
-                continue
-            else:
-                patience += 1
-                if patience > early_stop_threshold:
-                    break
+                    test_kld /= len(test_loader.dataset)
+                    test_ce /= len(test_loader.dataset)
+                    # Dataset の抽象クラスには __len__ は定義されていないので pylance に怒られている。
+
+                test_loss = test_kld + test_ce
+
+                if test_loss == np.nan:
+                    raise Exception("NaN value appeared in calculating loss function")
+                
+                train_loss_list.append(train_loss)
+                test_loss_list.append(test_loss)
+                kld_loss_list.append(test_kld)
+                ce_loss_list.append(test_ce)
+                
+                # pbar 周り
+                patience_str = f"[{patience}]" \
+                    if patience > 0 \
+                    else ( "[" + "⠸⠴⠦⠇⠋⠙"[epoch % 6] + "]")
+                description = f'{patience_str:>4}{epoch:4d} itr: train_loss {train_loss:6.2f} <-> test_loss {test_loss:6.2f} (ce:{test_ce:6.2f}, kld:{test_kld:6.2f})'
+                pbar.set_description(description)
+                pbar.update(1)
+
+                # 終了条件
+                #   テストデータの最小損失量の未更新が early_stop_threshold 回連続した時早期終了。
+                #   または，未更新回数が early_stop_threshold 以下のまま全 epoch が終了。
+                if np.min(test_loss_list) == test_loss:
+                    patience = 0
+                    best_model_state_dict = model.state_dict()
+                    continue
+                else:
+                    patience += 1
+                    if patience > early_stop_threshold:
+                        break
 
     except Exception as e:
         if str(e) == "NaN value appeared in calculating loss function":
