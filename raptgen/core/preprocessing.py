@@ -5,7 +5,6 @@ from typing import Callable, List, Tuple
 from Bio.Seq import Seq
 from Bio import SeqIO
 from path import Path
-from prometheus_client import Counter
 
 class State(IntEnum):
     M = 0
