@@ -4,13 +4,14 @@
 # todo: このファイルでは pHMM に関するアルゴリズムをまとめる。weblogo に関するアルゴリズムもここに集約する。
 
 import math
-from typing import Callable
+from typing import Callable, List, Tuple, Union
+from sympy import sequence
 import torch.nn.functional as F
 from torch import Tensor, nn
 import torch
 import numpy as np
 
-from raptgen.core.preprocessing import Transition, NucleotideID, State
+from raptgen.core.preprocessing import Transition, NucleotideID, State, ID_encode
 
 def kld_loss(mus: Tensor, logvars: Tensor):
     """KL Divergence 項（正則化項）の計算を行う。
@@ -263,9 +264,12 @@ def force_matching_loss(transition_probs: Tensor, match_cost: float = 5.0) -> Te
 class VAE(nn.Module):
     loss_fn: Callable[..., Tensor]
     # 再構成誤差項と正則化項を足し合わせて返却するか，別々に返却するか。
+    embed_size: int
+    # 埋め込み空間の次元数。
 
     def __init__(self, encoder, decoder, embed_size=10, hidden_size=32):
         super(VAE, self).__init__()
+        self.embed_size = embed_size
 
         self.encoder = encoder
         self.decoder = decoder
@@ -296,8 +300,10 @@ class EncoderCNN (nn.Module):
         self.window_size = window_size
 
         self.embed = nn.Embedding(
-            num_embeddings=4,  # [A,T,G,C,PAD,SOS,EOS]
-            embedding_dim=embedding_dim)
+            num_embeddings = 5,  # [A,T,G,C,PAD]
+            embedding_dim = embedding_dim,
+            padding_idx = NucleotideID.PAD,
+        )
 
         modules = [Bottleneck(embedding_dim, window_size)
                    for _ in range(num_layers)]
@@ -426,3 +432,117 @@ class CNN_PHMM_VAE(VAE):
         super(CNN_PHMM_VAE, self).__init__(
             encoder, decoder, embed_size, hidden_size)
         self.loss_fn = profile_hmm_vae_loss
+
+def embed_sequences(
+    sequences: List[str], 
+    model: VAE
+    ) -> List[np.ndarray]:
+    """対応する埋め込み空間の値を返却する。
+    
+    Parameters
+    ----------
+    sequences : List[str]
+        各残基が `A, U, C, G` で表現された塩基配列のリスト。
+    model : VAE
+        埋め込みに使用する VAE モデル。
+    
+    Returns
+    -------
+    coords : List[np.ndarray]
+        `sequences` に対応する埋め込み値
+    """
+    assert(type(sequences) == list)
+    
+    # https://discuss.pytorch.org/t/how-to-check-if-model-is-on-cuda/180
+    model_device = next(model.parameters()).device
+    with torch.no_grad():
+        model.eval()
+        coords: List[np.ndarray] = list()
+        for sequence in sequences:
+            recon, mu, logvar = model(
+                torch.Tensor(
+                    [ID_encode(sequence)],
+                    device=model_device).long()
+                )
+            mu_np = mu.to('cpu').detach().numpy().copy()
+            coords.append(mu_np)
+    
+    return coords
+
+def get_most_probable_seq(
+    coords: List[np.ndarray],
+    model: VAE,
+    ) -> Tuple[List[str], List[List[Tuple[int, int]]]]:
+    """座標に対応する pHMM モデルにおいて，最も生成されやすい配列を計算する。
+    配列生成時の状態パスも書き出す。
+    
+    Parameters
+    ----------
+    coords : List[np.ndarray]
+        座標値のリスト。
+    model : VAE
+        埋め込み値から pHMM のパラメータを計算する VAE モデル。
+    
+    Returns
+    -------
+    seqs_states_tuple : Tuple[List[str], List[List[Tuple[int, int]]]] 
+        一つ目は最も生成されやすい配列を順に計算したリスト，二つ目は一つ目のリストが生成されるときの最適状態列。タプルの一つ目が配列の座位で，二つ目が `State`。
+    """
+    assert(np.array(coords).shape[1] == model.embed_size)
+
+    sequences = list()
+    state_transits = list()
+
+    for coord in coords:
+        transition_prob, emission_prob \
+            = model.decoder(torch.Tensor([coord]))
+        a_log_prob: np.ndarray = transition_prob.detach().numpy()[0]
+        e_log_prob: np.ndarray = emission_prob.detach().numpy()[0]
+        a_prob: np.ndarray = np.log(a_log_prob)
+        e_prob: np.ndarray = np.log(e_log_prob)
+        e_prob = e_prob / np.sum(e_prob, axis=1)[:, None]
+
+        idx, state = 0, State.M
+        states: List[Tuple[int, int]] = [(idx, state)]
+        seq = ""
+        while True:
+            if state == State.M:
+                p = a_prob[idx][np.array([
+                    Transition.M2M.value,
+                    Transition.M2I.value,
+                    Transition.M2D.value])]
+            elif state == State.I:
+                p = [
+                    a_prob[idx][Transition.I2M.value],
+                    0,
+                    0]
+            elif state == State.D:
+                p = [
+                    a_prob[idx][Transition.D2M.value],
+                    0,
+                    a_prob[idx][Transition.D2D.value]]
+            else:
+                raise Exception()
+
+            p[np.argmax(p)] += 1000000
+            state = np.random.choice([State.M, State.I, State.D], p=p/sum(p))
+            if state != State.I:
+                idx += 1
+            states.append((idx, state))
+
+            if idx == a_prob.shape[0]:
+                break
+
+            if state == State.M:
+                # logger.info("{:.2f}, {:.2f}, {:.2f}, {:.2f}".format(*self.e[idx-1]))
+                p = np.copy(e_prob[idx-1])
+                p[np.argmax(p)] += 100000
+                seq += np.random.choice(list("ATGC"), p=p/sum(p))
+            elif state == State.I:
+                seq += "N"
+            else:
+                seq += "_"
+        sequences.append(seq)
+        state_transits.append(states)
+
+    return sequences, state_transits
