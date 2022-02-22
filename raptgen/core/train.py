@@ -207,19 +207,30 @@ def train_VAE(
                     batch = batch.to(device)
                     optimizer.zero_grad()
                     
-                    if (loss_fn == profile_hmm_vae_loss and epoch <= force_epochs):
+                    if loss_fn == profile_hmm_vae_loss:
                         reconst_params, mus, logvars = model(batch)
                         transition_probs, emission_probs = reconst_params
-                        loss: torch.Tensor = loss_fn(
-                            batch_input = batch,
-                            transition_probs = transition_probs,
-                            emission_probs = emission_probs,
-                            mus = mus,
-                            logvars = logvars,
-                            beta = beta,
-                            force_matching = force_matching,
-                            match_cost = 1 + 4 * (1 - epoch / force_epochs)
-                        )
+                        if epoch <= force_epochs:
+                            loss: torch.Tensor = loss_fn(
+                                batch_input = batch,
+                                transition_probs = transition_probs,
+                                emission_probs = emission_probs,
+                                mus = mus,
+                                logvars = logvars,
+                                beta = beta,
+                                force_matching = force_matching,
+                                match_cost = 1 + 4 * (1 - epoch / force_epochs)
+                            )
+                        else:
+                            loss: torch.Tensor = loss_fn(
+                                batch_input = batch,
+                                transition_probs = transition_probs,
+                                emission_probs = emission_probs,
+                                mus = mus,
+                                logvars = logvars,
+                                beta = beta,
+                                force_matching = False,
+                            )
                     else:
                         loss: torch.Tensor = loss_fn(
                             batch,
