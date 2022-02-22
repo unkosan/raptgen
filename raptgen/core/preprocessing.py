@@ -1,3 +1,4 @@
+from copy import copy, deepcopy
 from enum import IntEnum
 import numpy as np
 import pandas as pd
@@ -387,6 +388,7 @@ def default_cutfunc(
     adapter_removed_read : str
         両末端の固定塩基配列を除去した `read` 配列。
     """
+    read = deepcopy(read)
     fwd_adapter_length = len(fwd_adapter)
     rev_adapter_length = len(rev_adapter)
     if rev_adapter_length != 0:
