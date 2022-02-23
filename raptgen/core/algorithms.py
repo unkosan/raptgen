@@ -5,7 +5,6 @@
 
 import math
 from typing import Callable, List, Tuple, Union
-from sympy import sequence
 import torch.nn.functional as F
 from torch import Tensor, nn
 import torch
