@@ -5,7 +5,7 @@ import pandas as pd
 from typing import Callable, List, Tuple
 from Bio.Seq import Seq
 from Bio import SeqIO
-from path import Path
+from pathlib import Path
 
 class State(IntEnum):
     M = 0
