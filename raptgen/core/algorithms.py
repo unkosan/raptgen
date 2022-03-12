@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 import torch
 import numpy as np
+import pandas as pd
 
 from raptgen.core.preprocessing import Transition, NucleotideID, State, ID_encode
 
@@ -101,7 +102,7 @@ def profile_hmm_vae_loss(
     else:
         return reconstruction_error + beta * regularization_error
 
-def profile_hmm_loss(
+def profile_hmm_loss_version_sequence(
     transition_probs: Tensor, 
     emission_probs: Tensor,
     batch_input: Tensor, 
@@ -114,7 +115,7 @@ def profile_hmm_loss(
         pHMM の遷移確率。(`batch`, `model_length`+1, `combi of 'from' and 'to'`) の 3 次元構成になっており，全確率は対数で表現されていることとする。
     emission_probs : Tensor
         pHMM の出力確率。(`batch`, `model_length`, `nucleotide_type`=4) の 3 次元構成になっている必要があり，全確率は対数で表現されていることとする。
-    input_batch : Tensor
+    batch_input : Tensor
         VAE モデルに入力したバッチの値。(`batch`, `string_length`) の 2 次元構成になっている必要があり，各塩基は `NucleotideID` に示された値で表現されていなければならない。パディングも許可される。
     
     Returns
@@ -179,6 +180,103 @@ def profile_hmm_loss(
         result_list.append(-torch.logsumexp(f[:, motif_len, random_len], dim=0))
 
     return torch.stack(result_list)
+
+def profile_hmm_loss(
+    transition_probs: Tensor, 
+    emission_probs: Tensor,
+    batch_input: Tensor, 
+    ) -> Tensor:
+    """pHMM の遷移確率と出力確率をとり，`batch_input` で示された元の配列が生成される確率を計算する。
+    
+    Parameters
+    ----------
+    transition_probs : Tensor
+        pHMM の遷移確率。(`batch`, `model_length`+1, `combi of 'from' and 'to'`) の 3 次元構成になっており，全確率は対数で表現されていることとする。
+    emission_probs : Tensor
+        pHMM の出力確率。(`batch`, `model_length`, `nucleotide_type`=4) の 3 次元構成になっている必要があり，全確率は対数で表現されていることとする。
+    batch_input : Tensor
+        VAE モデルに入力したバッチの値。(`batch`, `string_length`) の 2 次元構成になっている必要があり，各塩基は `NucleotideID` に示された値で表現されていなければならない。パディングも許可される。
+    
+    Returns
+    -------
+    probs : Tensor
+        遷移確率，出力確率が決まっていた際に `batch_input` が生成された確率。
+        (`batch`,) の 1 次元構成になっている。
+    """
+    batch_size = batch_input.shape[0]
+    motif_len = emission_probs.shape[1]
+
+    # 下準備
+    record_list = list()
+    for elem_index in range(batch_size):
+        input_seq = batch_input[elem_index] # sequence of NucleotideID
+
+        # padding を抜き取る。
+        input_seq = torch.masked_select(input_seq, input_seq.ne(NucleotideID.PAD))
+        record_list.append({
+            'seq': input_seq,
+            'len': len(input_seq),
+            'a': transition_probs[elem_index],
+            'e_m': emission_probs[elem_index],
+            'val': np.nan,
+        })
+    batch_pd = pd.DataFrame.from_records(record_list)
+
+    pd.set_option('mode.chained_assignment', None)
+    for seq_length in np.unique(batch_pd['len']):
+        equal_len_pd = batch_pd[batch_pd['len'] == int(seq_length)]
+        set_size = len(equal_len_pd)
+
+        input_seq_set = torch.stack(equal_len_pd['seq'].to_list())
+        a_set = torch.stack(equal_len_pd['a'].to_list())
+        e_m_set = torch.stack(equal_len_pd['e_m'].to_list())
+
+        # forward アルゴリズムを対数形式で行う。
+        # (match or insert or delete, motif_len, random_len) の三次元の動的計画表を用意する。
+        f_set = torch.ones(
+            size = (set_size, 3, motif_len + 1, seq_length + 1),
+            device = input_seq_set.device
+        ) * (-100)
+        f_set[:, State.M, 0, 0] = 0
+
+        for l in range(seq_length + 1): # locus starts from '1'
+            for k in range(motif_len + 1): # motif starts from '1' but model starts from '0'
+                # for state M
+                if l != 0 and k != 0:
+                    f_set[:, State.M, k, l] \
+                        = e_m_set[:, k-1] \
+                            .gather(1, input_seq_set[:, l-1:l])[:, 0] \
+                        + torch.logsumexp(torch.stack((
+                            a_set[:, k-1, Transition.M2M] + f_set[:, State.M, k-1, l-1],
+                            a_set[:, k-1, Transition.I2M] + f_set[:, State.I, k-1, l-1],
+                            a_set[:, k-1, Transition.D2M] + f_set[:, State.D, k-1, l-1],
+                        )), dim=0)
+                # for state I
+                if l != 0:
+                    f_set[:, State.I, k, l] \
+                        = np.log(1/4) \
+                        + torch.logsumexp(torch.stack((
+                            a_set[:, k, Transition.M2I] + f_set[:, State.M, k, l-1],
+                            a_set[:, k, Transition.I2I] + f_set[:, State.I, k, l-1],
+                        )), dim=0)
+                # for state D
+                if k != 0:
+                    f_set[:, State.D, k, l] \
+                        = torch.logsumexp(torch.stack((
+                            a_set[:, k-1, Transition.M2D] + f_set[:, State.M, k-1, l],
+                            a_set[:, k-1, Transition.D2D] + f_set[:, State.D, k-1, l],
+                        )), dim=0)
+        
+        f_set[:, State.M, motif_len, seq_length] += a_set[:, motif_len, Transition.M2M]
+        f_set[:, State.I, motif_len, seq_length] += a_set[:, motif_len, Transition.I2M]
+        f_set[:, State.D, motif_len, seq_length] += a_set[:, motif_len, Transition.D2M]
+
+        val_set = - torch.logsumexp(f_set[:, :, motif_len, seq_length], dim=1)
+        equal_len_pd['val'] = list(val_set)
+        batch_pd.update(equal_len_pd)
+    pd.reset_option('mode.chained_assignment')
+
+    return torch.stack(batch_pd['val'].to_list())
 
 def force_matching_loss(transition_probs: Tensor, match_cost: float = 5.0) -> Tensor:
     """遷移確率において，Match to Match の確率が小さければ小さい程大きな損失値を与える損失関数を定義する。
