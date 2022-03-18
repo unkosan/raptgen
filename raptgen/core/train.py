@@ -136,7 +136,7 @@ def train_VAE(
     force_matching: bool = False,
     force_epochs: int = 20,
     show_tqdm: bool = True,
-    ) -> Tuple[torch.nn.Module, pd.DataFrame]:
+    ) -> Tuple[VAE, pd.DataFrame]:
     """`train_loader` に示されるトレーニングデータを使用して，`model` で示される任意の VAE モデルをトレーニングする。
     `train_loader` 内の各データは `model` の `self.forward()` 関数の引数に投入され，返り値は `self.loss_fn` の引数に投入される。これにより損失量が計算され，逆誤差伝搬された後 `optimizer` で各パラメータが最適化される。
     
