@@ -218,10 +218,10 @@ def profile_hmm_loss(
             'len': len(input_seq),
             'a': transition_probs[elem_index],
             'e_m': emission_probs[elem_index],
-            'val': np.nan,
         })
     batch_pd = pd.DataFrame.from_records(record_list)
 
+    result_list = list()
     pd.set_option('mode.chained_assignment', None)
     for seq_length in np.unique(batch_pd['len']):
         equal_len_pd = batch_pd[batch_pd['len'] == int(seq_length)]
@@ -237,7 +237,8 @@ def profile_hmm_loss(
             size = (set_size, 3, motif_len + 1, seq_length + 1),
             device = input_seq_set.device
         ) * (-100)
-        f_set[:, State.M, 0, 0] = 0
+        # f_set[:, State.M, 0, 0] = 0
+        f_set[:, 0, 0, 0] = 0
 
         for l in range(seq_length + 1): # locus starts from '1'
             for k in range(motif_len + 1): # motif starts from '1' but model starts from '0'
@@ -272,11 +273,25 @@ def profile_hmm_loss(
         f_set[:, State.D, motif_len, seq_length] += a_set[:, motif_len, Transition.D2M]
 
         val_set = - torch.logsumexp(f_set[:, :, motif_len, seq_length], dim=1)
-        equal_len_pd['val'] = list(val_set)
-        batch_pd.update(equal_len_pd)
+
+        result_list += list(zip(
+            list(equal_len_pd.index),
+            list(val_set),
+        ))
+
     pd.reset_option('mode.chained_assignment')
 
-    return torch.stack(batch_pd['val'].to_list())
+    result_sorted = sorted(
+        result_list, 
+        key = lambda x: x[0],
+    )
+    
+    result_tensor = Tensor([
+        value_tuple[1]
+        for value_tuple in result_sorted
+    ])
+
+    return result_tensor
 
 def force_matching_loss(transition_probs: Tensor, match_cost: float = 5.0) -> Tensor:
     """遷移確率において，Match to Match の確率が小さければ小さい程大きな損失値を与える損失関数を定義する。
@@ -396,11 +411,15 @@ class EncoderCNN (nn.Module):
         self.embedding_dim = embedding_dim
         self.window_size = window_size
 
+        # self.embed = nn.Embedding(
+        #     num_embeddings = 5,  # [A,T,G,C,PAD]
+        #     embedding_dim = embedding_dim,
+        #     padding_idx = NucleotideID.PAD,
+        # )
+
         self.embed = nn.Embedding(
-            num_embeddings = 5,  # [A,T,G,C,PAD]
-            embedding_dim = embedding_dim,
-            padding_idx = NucleotideID.PAD,
-        )
+            num_embeddings=4,  # [A,T,G,C,PAD,SOS,EOS]
+            embedding_dim=embedding_dim)
 
         modules = [Bottleneck(embedding_dim, window_size)
                    for _ in range(num_layers)]
