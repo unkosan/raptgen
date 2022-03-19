@@ -129,7 +129,7 @@ def train_VAE(
     test_loader: DataLoader[torch.Tensor],
     optimizer: torch.optim.Optimizer,
     device: torch.device = torch.device("cpu"), # フォールトトレランス。
-    loss_fn: Callable or None = None,
+    loss_fn: Callable | None = None,
     early_stop_threshold: int = 20,
     beta_schedule: bool = False,
     beta_threshold: int = 20,
