@@ -3,13 +3,11 @@
 
 # todo: このファイルでは pHMM に関するアルゴリズムをまとめる。weblogo に関するアルゴリズムもここに集約する。
 
-import math
-from typing import Callable, List, Tuple, Union
-import torch.nn.functional as F
+from typing import Callable, List, Tuple
 from torch import Tensor, nn
+import torch.nn.functional as F
 import torch
 import numpy as np
-import pandas as pd
 
 from raptgen.core.preprocessing import Transition, NucleotideID, State, ID_encode
 
@@ -98,88 +96,19 @@ def profile_hmm_vae_loss(
     regularization_error = kld_loss(mus, logvars).mean()
 
     if split_ce_kld == True:
-        return Tensor([reconstruction_error, regularization_error])
+        return torch.stack([reconstruction_error, regularization_error])
     else:
         return reconstruction_error + beta * regularization_error
 
-def profile_hmm_loss_version_sequence(
-    transition_probs: Tensor, 
-    emission_probs: Tensor,
-    batch_input: Tensor, 
-    ) -> Tensor:
-    """pHMM の遷移確率と出力確率をとり，`batch_input` で示された元の配列が生成される確率を計算する。
-    
-    Parameters
-    ----------
-    transition_probs : Tensor
-        pHMM の遷移確率。(`batch`, `model_length`+1, `combi of 'from' and 'to'`) の 3 次元構成になっており，全確率は対数で表現されていることとする。
-    emission_probs : Tensor
-        pHMM の出力確率。(`batch`, `model_length`, `nucleotide_type`=4) の 3 次元構成になっている必要があり，全確率は対数で表現されていることとする。
-    batch_input : Tensor
-        VAE モデルに入力したバッチの値。(`batch`, `string_length`) の 2 次元構成になっている必要があり，各塩基は `NucleotideID` に示された値で表現されていなければならない。パディングも許可される。
-    
-    Returns
-    -------
-    probs : Tensor
-        遷移確率，出力確率が決まっていた際に `batch_input` が生成された確率。
-        (`batch`,) の 1 次元構成になっている。
-    """
-    batch_size = batch_input.shape[0]
-
-    result_list = list()
-
-    for batch_elem in range(batch_size):
-        a = transition_probs[batch_elem] # (state_from, state_to, motif_len + 1)
-        e_m = emission_probs[batch_elem] # (motif_len, nucleotype_AUCG)
-        motif_len = e_m.shape[1]
-        input_seq = batch_input[batch_elem] # sequence of NucleotideID
-
-        # padding を抜き取る。
-        input_seq = torch.masked_select(input_seq, input_seq.ne(NucleotideID.PAD))
-        random_len = len(input_seq)
-
-        # forward アルゴリズムを対数形式で行う。
-        # (match or insert or delete, motif_len, random_len) の三次元の動的計画表を用意する。
-        f = torch.ones(
-            (3, motif_len + 1, random_len + 1),
-            device = batch_input.device
-        ) * (-100)
-        f[State.M, 0, 0] = 0
-
-        for l in range(random_len + 1): # locus starts from '1'
-            for k in range(motif_len + 1): # motif starts from '1' but model starts from '0'
-                # for state M
-                if l != 0 and k != 0:
-                    f[State.M, k, l] \
-                        = e_m[k-1, input_seq[l-1]] \
-                        + torch.logsumexp(torch.stack((
-                            a[k-1, Transition.M2M] + f[State.M, k-1, l-1],
-                            a[k-1, Transition.I2M] + f[State.I, k-1, l-1],
-                            a[k-1, Transition.D2M] + f[State.D, k-1, l-1],
-                        )), dim=0)
-                # for state I
-                if l != 0:
-                    f[State.I, k, l] \
-                        = math.log(1/4) \
-                        + torch.logsumexp(torch.stack((
-                            a[k, Transition.M2I] + f[State.M, k, l-1],
-                            a[k, Transition.I2I] + f[State.I, k, l-1],
-                        )), dim=0)
-                # for state D
-                if k != 0:
-                    f[State.D, k, l] \
-                        = torch.logsumexp(torch.stack((
-                            a[k-1, Transition.M2D] + f[State.M, k-1, l],
-                            a[k-1, Transition.D2D] + f[State.D, k-1, l],
-                        )), dim=0)
-        
-        f[State.M, motif_len, random_len] += a[motif_len, Transition.M2M]
-        f[State.I, motif_len, random_len] += a[motif_len, Transition.I2M]
-        f[State.D, motif_len, random_len] += a[motif_len, Transition.D2M]
-
-        result_list.append(-torch.logsumexp(f[:, motif_len, random_len], dim=0))
-
-    return torch.stack(result_list)
+def _masked_select_1D(input: Tensor, mask: Tensor):
+    """N 次元配列の dim=0 を 1 次元 mask でフィルタリングする。`torch.masked_select` はフィルタリングされる配列と mask 配列の形状が同じである必要がある"""
+    assert mask.dim() == 1 and mask.dtype == torch.bool
+    num_true = int(torch.sum(mask).item())
+    output_shape = torch.Size([num_true]) + input.shape[1:]
+    for _ in range(input.dim() - 1):
+        mask = mask.unsqueeze(-1)
+    expanded_mask = mask.expand(input.size())
+    return torch.masked_select(input, expanded_mask).reshape(output_shape)
 
 def profile_hmm_loss(
     transition_probs: Tensor, 
@@ -206,30 +135,24 @@ def profile_hmm_loss(
     batch_size = batch_input.shape[0]
     motif_len = emission_probs.shape[1]
 
-    # 下準備
-    record_list = list()
-    for elem_index in range(batch_size):
-        input_seq = batch_input[elem_index] # sequence of NucleotideID
-
-        # padding を抜き取る。
-        input_seq = torch.masked_select(input_seq, input_seq.ne(NucleotideID.PAD))
-        record_list.append({
-            'seq': input_seq,
-            'len': len(input_seq),
-            'a': transition_probs[elem_index],
-            'e_m': emission_probs[elem_index],
-        })
-    batch_pd = pd.DataFrame.from_records(record_list)
+    # 各配列の長さ取得
+    lengths = torch.sum(batch_input != NucleotideID.PAD, dim = 1)
+    indeces = Tensor(range(batch_size))
+    unique_lengths = set(lengths.tolist())
 
     result_list = list()
-    pd.set_option('mode.chained_assignment', None)
-    for seq_length in np.unique(batch_pd['len']):
-        equal_len_pd = batch_pd[batch_pd['len'] == int(seq_length)]
-        set_size = len(equal_len_pd)
+    for seq_length in unique_lengths:
+        mask = lengths.eq(seq_length)
+        set_size = int(mask.sum().item())
 
-        input_seq_set = torch.stack(equal_len_pd['seq'].to_list())
-        a_set = torch.stack(equal_len_pd['a'].to_list())
-        e_m_set = torch.stack(equal_len_pd['e_m'].to_list())
+        index_set = torch.masked_select(indeces, mask)
+        a_set = _masked_select_1D(transition_probs, mask)
+        e_m_set = _masked_select_1D(emission_probs, mask)
+
+        input_seq_set = _masked_select_1D(batch_input, mask)
+        input_seq_set = input_seq_set \
+            .masked_select(input_seq_set.ne(NucleotideID.PAD)) \
+            .reshape(set_size, seq_length)
 
         # forward アルゴリズムを対数形式で行う。
         # (match or insert or delete, motif_len, random_len) の三次元の動的計画表を用意する。
@@ -237,8 +160,7 @@ def profile_hmm_loss(
             size = (set_size, 3, motif_len + 1, seq_length + 1),
             device = input_seq_set.device
         ) * (-100)
-        # f_set[:, State.M, 0, 0] = 0
-        f_set[:, 0, 0, 0] = 0
+        f_set[:, State.M, 0, 0] = 0
 
         for l in range(seq_length + 1): # locus starts from '1'
             for k in range(motif_len + 1): # motif starts from '1' but model starts from '0'
@@ -275,18 +197,16 @@ def profile_hmm_loss(
         val_set = - torch.logsumexp(f_set[:, :, motif_len, seq_length], dim=1)
 
         result_list += list(zip(
-            list(equal_len_pd.index),
-            list(val_set),
+            index_set.tolist(),
+            val_set.split(1),
         ))
-
-    pd.reset_option('mode.chained_assignment')
 
     result_sorted = sorted(
         result_list, 
         key = lambda x: x[0],
     )
     
-    result_tensor = Tensor([
+    result_tensor = torch.stack([
         value_tuple[1]
         for value_tuple in result_sorted
     ])
@@ -311,67 +231,12 @@ def force_matching_loss(transition_probs: Tensor, match_cost: float = 5.0) -> Te
         (`batch`, ) の一次元構成になっている。
     """
     loss \
-        = math.log( (match_cost + 1) * match_cost / 2 ) \
+        = np.log( (match_cost + 1) * match_cost / 2 ) \
         + torch.sum(
             (match_cost - 1) * transition_probs[:, :, Transition.M2M], 
             dim=1,
         )
     return - loss
-
-    # for i in range(random_len + 1):
-    #     for j in range(motif_len + 1):
-    #         # State M
-    #         if j*i != 0:
-    #             f[:, State.M, j, i] \
-    #                 = e_m[:, j-1].gather(1, batch_input[:, i-1:i])[:, 0] \
-    #                 + torch.logsumexp(torch.stack((
-    #                     a[:, j - 1, Transition.M2M] +
-    #                     f[:, State.M, j - 1, i - 1],
-    #                     a[:, j - 1, Transition.I2M] +
-    #                     f[:, State.I, j - 1, i - 1],
-    #                     a[:, j - 1, Transition.D2M] +
-    #                     f[:, State.D, j - 1, i - 1])), dim=0)
-                
-    #         # State I
-    #         if i != 0:
-    #             f[:, State.I, j, i] \
-    #                 = - 1.3863 \
-    #                 + torch.logsumexp(torch.stack((
-    #                     a[:, j, Transition.M2I] +
-    #                     f[:, State.M, j, i-1],
-    #                     # Removed D-to-I transition
-    #                     # a[:, j, Transition.D2I] +
-    #                     # F[:, State.D, j, i-1],
-    #                     a[:, j, Transition.I2I] +
-    #                     f[:, State.I, j, i-1]
-    #                 )), dim=0)
-
-    #         # State D
-    #         if j != 0:
-    #             f[:, State.D, j, i] = \
-    #                 torch.logsumexp(torch.stack((
-    #                     a[:, j - 1, Transition.M2D] +
-    #                     f[:, State.M, j - 1, i],
-    #                     # REMOVED I-to-D transition
-    #                     # a[:, j - 1, Transition.I2D] +
-    #                     # F[:, State.I, j - 1, i],
-    #                     a[:, j - 1, Transition.D2D] +
-    #                     f[:, State.D, j - 1, i]
-    #                 )), dim=0)
-
-    # # final I->M transition
-    # f[:, State.M, motif_len, random_len] += a[:,
-    #                                           motif_len, Transition.M2M]
-    # f[:, State.I, motif_len, random_len] += a[:,
-    #                                           motif_len, Transition.I2M]
-    # f[:, State.D, motif_len, random_len] += a[:,
-    #                                           motif_len, Transition.D2M]
-
-    # if force_matching:
-    #     force_loss = np.log((match_cost+1)*match_cost/2) + \
-    #         torch.sum((match_cost-1) * a[:, :, Transition.M2M], dim=1).mean()
-    #     return - force_loss - torch.logsumexp(f[:, :, motif_len, random_len], dim=1).mean()
-    # return - torch.logsumexp(f[:, :, motif_len, random_len], dim=1).mean()
 
 class VAE(nn.Module):
     loss_fn: Callable[..., Tensor]
@@ -411,15 +276,11 @@ class EncoderCNN (nn.Module):
         self.embedding_dim = embedding_dim
         self.window_size = window_size
 
-        # self.embed = nn.Embedding(
-        #     num_embeddings = 5,  # [A,T,G,C,PAD]
-        #     embedding_dim = embedding_dim,
-        #     padding_idx = NucleotideID.PAD,
-        # )
-
         self.embed = nn.Embedding(
-            num_embeddings=4,  # [A,T,G,C,PAD,SOS,EOS]
-            embedding_dim=embedding_dim)
+            num_embeddings = 5,  # [A,T,G,C,PAD]
+            embedding_dim = embedding_dim,
+            padding_idx = NucleotideID.PAD,
+        )
 
         modules = [Bottleneck(embedding_dim, window_size)
                    for _ in range(num_layers)]
