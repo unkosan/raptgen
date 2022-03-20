@@ -11,3 +11,5 @@ Pipfile.lock
 scripts_local/
 **/.DS_Store
 data/local/**
+
+logs/**
