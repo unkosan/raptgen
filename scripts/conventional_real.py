@@ -55,9 +55,9 @@ import click
     type = int,
     default = 50)
 def main(
-    data_path: Path,
-    model_save_path: Path,
-    score_save_path: Path,
+    data_path: str,
+    model_save_path: str,
+    score_save_path: str,
     seed: int,
     device_name: str,
     fwd_adapter: str,
@@ -77,8 +77,8 @@ def main(
     r_len = target_length - len(fwd_adapter) - len(rev_adapter)
 
     df = read_SELEX_data(
-        filepath = str(data_path),
-        filetype = data_path.suffix[1:],
+        filepath = data_path,
+        filetype = Path(data_path).suffix[1:],
         is_biopython_format = False,
     )
 
@@ -137,18 +137,35 @@ def main(
         device = device,
         early_stop_threshold = early_stop_threshold,
         beta_schedule = (beta_schedule_epochs != None),
-            beta_threshold = beta_schedule_epochs,
+        beta_threshold = beta_schedule_epochs,
         force_matching = (force_matching_epochs != None),
-            force_epochs = force_matching_epochs,
+        force_epochs = force_matching_epochs,
         show_tqdm = False,
     )
 
     with Path(model_save_path).open("wb") as handle:
         pickle.dump(obj = model_trained.state_dict(), file = handle)
 
-    df_trained.to_pickle(path = str(score_save_path))
+    df_trained.to_pickle(path = score_save_path)
 
     torch.cuda.empty_cache()
+
+    print(f"""Training finished with the following settings
+    SELEX data path: {data_path}
+    Model saved path: {model_save_path}
+    Score saved path: {score_save_path}
+    Seed value: {seed}
+    Device name: {device_name}
+    Forward adapter: {fwd_adapter}
+    Reverse adapter: {rev_adapter}
+    Target length: {target_length}
+    Tolerance value: {tolerance}
+    Minimum count: {min_count}
+    Embedding size: {embed_size} dimension
+    Maximum epochs: {epochs} epochs
+    Force matching epochs: {str(force_matching_epochs) + " epochs" if force_matching_epochs != None else None}
+    Beta scheduling epochs: {str(beta_schedule_epochs) + " epochs" if beta_schedule_epochs != None else None}
+    Early-stop Threshold: {early_stop_threshold} epochs""")
 
 if __name__ == "__main__":
     main()
