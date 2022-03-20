@@ -19,7 +19,7 @@ def plotEllipse(
     ax: plt.Axes,
     mu: np.ndarray,
     coval: np.ndarray,
-    enrich: float | None = None,
+    enrich: float or None = None,
     ) -> plt.Axes:
     """二次元の平均ベクトルと分散共分散行列を引数に取り， `ax` に該当のガウス分布を示す楕円を書き込む"""
     xcenter, ycenter = mu
