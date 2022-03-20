@@ -42,6 +42,10 @@ import click
 @click.option("--embed-size",
     type = int,
     required = True)
+@click.option("--phmm-model-length",
+    help = "if not set, random region length will be assigned",
+    type = int,
+    default = None)
 @click.option("--epochs",
     type = int,
     required = True)
@@ -66,21 +70,44 @@ def main(
     tolerance: int,
     min_count: int,
     embed_size: int,
+    phmm_model_length: int,
     epochs: int,
     force_matching_epochs: int,
     beta_schedule_epochs: int,
     early_stop_threshold: int,
 ) -> None:
 
+    print(f"""Training started with the following settings:
+    SELEX data path: {data_path}
+    Model saved path: {model_save_path}
+    Score saved path: {score_save_path}
+    Seed value: {seed}
+    Device name: {device_name}
+    Forward adapter: {fwd_adapter}
+    Reverse adapter: {rev_adapter}
+    Target length: {target_length}
+    Tolerance value: {tolerance}
+    Minimum count: {min_count}
+    Embedding size: {embed_size} dimension
+    pHMM model length: {phmm_model_length}
+    Maximum epochs: {epochs} epochs
+    Force matching epochs: {str(force_matching_epochs) + " epochs" if force_matching_epochs != None else None}
+    Beta scheduling epochs: {str(beta_schedule_epochs) + " epochs" if beta_schedule_epochs != None else None}
+    Early-stop Threshold: {early_stop_threshold} epochs""")
+
     set_seed(seed)
 
     r_len = target_length - len(fwd_adapter) - len(rev_adapter)
+
+    if phmm_model_length == None:
+        phmm_model_length = r_len
 
     df = read_SELEX_data(
         filepath = data_path,
         filetype = Path(data_path).suffix[1:],
         is_biopython_format = False,
     )
+    num_rawseq = len(df)
 
     df = df[df['Sequence'].apply(
         lambda seq: default_filterfunc(
@@ -91,10 +118,14 @@ def main(
             tolerance = tolerance,
         )
     )] # filter with t_len ± tolerance
+    num_filtered = len(df)
 
     se_unique = df['Sequence'].value_counts()
+    num_unique = len(se_unique)
+
     se_unique = se_unique[se_unique >= min_count]
     # filter with minimum count
+    num_min_count = len(se_unique)
 
     se_encode = pd.Series(se_unique.index).apply(
         lambda seq: default_cutfunc(
@@ -109,6 +140,12 @@ def main(
         )
     ) # encode data
 
+    print(f"""The number of sequences:
+    Raw: {num_rawseq}
+    Filtered (length: {target_length} ± {tolerance}): {num_filtered}
+    Unique: {num_unique}
+    Minimum count {min_count}: {num_min_count}""")
+
     train_loader, test_loader = get_dataloader(
         ndarray_data = np.array(se_encode.to_list()),
         test_size = 0.1,
@@ -122,7 +159,7 @@ def main(
     device = torch.device(device_name)
 
     model = CNN_PHMM_VAE(
-        motif_len = r_len,
+        motif_len = phmm_model_length,
         embed_size = embed_size,
     ).to(device)
 
@@ -143,29 +180,19 @@ def main(
         show_tqdm = False,
     )
 
+    Path(model_save_path).parent.mkdir(exist_ok=True, parents=True)
     with Path(model_save_path).open("wb") as handle:
         pickle.dump(obj = model_trained.state_dict(), file = handle)
 
+    Path(score_save_path).parent.mkdir(exist_ok=True, parents=True)
     df_trained.to_pickle(path = score_save_path)
 
     torch.cuda.empty_cache()
 
-    print(f"""Training finished with the following settings
-    SELEX data path: {data_path}
-    Model saved path: {model_save_path}
-    Score saved path: {score_save_path}
-    Seed value: {seed}
-    Device name: {device_name}
-    Forward adapter: {fwd_adapter}
-    Reverse adapter: {rev_adapter}
-    Target length: {target_length}
-    Tolerance value: {tolerance}
-    Minimum count: {min_count}
-    Embedding size: {embed_size} dimension
-    Maximum epochs: {epochs} epochs
-    Force matching epochs: {str(force_matching_epochs) + " epochs" if force_matching_epochs != None else None}
-    Beta scheduling epochs: {str(beta_schedule_epochs) + " epochs" if beta_schedule_epochs != None else None}
-    Early-stop Threshold: {early_stop_threshold} epochs""")
+    best_epoch_se = df_trained.loc[df_trained['test_loss'].idxmin()]
+    print(f"""Neglog ELBO values at best test loss:
+    Training set: {best_epoch_se['train_loss']:.3f}
+    Test set: {best_epoch_se['test_loss']:.3f} (re {best_epoch_se['test_recon']:.3f} + kld {best_epoch_se['test_kld']:.3f})""")
 
 if __name__ == "__main__":
     main()
