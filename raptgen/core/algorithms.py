@@ -441,7 +441,7 @@ def embed_sequences(
                     [ID_encode(sequence)],
                     device=model_device).long()
                 )
-            mu_np = mu.to('cpu').detach().numpy().copy()
+            mu_np = mu.to('cpu').detach().numpy().copy()[0]
             coords.append(mu_np)
     
     return coords
