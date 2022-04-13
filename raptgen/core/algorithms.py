@@ -3,11 +3,14 @@
 
 # todo: このファイルでは pHMM に関するアルゴリズムをまとめる。weblogo に関するアルゴリズムもここに集約する。
 
-from typing import Callable, List, Tuple
+from time import time
+from typing import Callable, List, Tuple, Union
+from matplotlib.axes import Axes
 from torch import Tensor, nn
 import torch.nn.functional as F
 import torch
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 from raptgen.core.preprocessing import Transition, NucleotideID, State, ID_encode
 
@@ -448,7 +451,8 @@ def embed_sequences(
 
 def get_most_probable_seq(
     coords: List[np.ndarray],
-    model: VAE,
+    model: CNN_PHMM_VAE,
+    proba_is_log: bool = True,
     ) -> Tuple[List[str], List[List[Tuple[int, int]]]]:
     """座標に対応する pHMM モデルにおいて，最も生成されやすい配列を計算する。
     配列生成時の状態パスも書き出す。
@@ -457,9 +461,11 @@ def get_most_probable_seq(
     ----------
     coords : List[np.ndarray]
         座標値のリスト。
-    model : VAE
+    model : CNN_PHMM_VAE
         埋め込み値から pHMM のパラメータを計算する VAE モデル。
-    
+    proba_is_log : bool = True
+        `model` の pHMM-decoder が生成する出力確率および遷移確率が対数で表現されている場合 True, そうでない場合 False となる。
+
     Returns
     -------
     seqs_states_tuple : Tuple[List[str], List[List[Tuple[int, int]]]] 
@@ -468,58 +474,158 @@ def get_most_probable_seq(
     assert(np.array(coords).shape[1] == model.embed_size)
 
     sequences = list()
-    state_transits = list()
+    states_transit = list()
 
     for coord in coords:
-        transition_prob, emission_prob \
+        transition_probs, emission_probs \
             = model.decoder(torch.Tensor([coord]))
-        a_log_prob: np.ndarray = transition_prob.detach().numpy()[0]
-        e_log_prob: np.ndarray = emission_prob.detach().numpy()[0]
-        a_prob: np.ndarray = np.log(a_log_prob)
-        e_prob: np.ndarray = np.log(e_log_prob)
-        e_prob = e_prob / np.sum(e_prob, axis=1)[:, None]
+        a_probs: np.ndarray = transition_probs.detach().numpy()[0]
+        e_probs: np.ndarray = emission_probs.detach().numpy()[0]
+        if proba_is_log:
+            a_probs = np.exp(a_probs)
+            e_probs = np.exp(e_probs)
 
-        idx, state = 0, State.M
-        states: List[Tuple[int, int]] = [(idx, state)]
+        index, state = 0, State.M
+        states: List[Tuple[int, int]] = [(index, state)]
         seq = ""
         while True:
+            a_prob: np.ndarray = a_probs[index]
             if state == State.M:
-                p = a_prob[idx][np.array([
-                    Transition.M2M.value,
-                    Transition.M2I.value,
-                    Transition.M2D.value])]
+                next_transit_prob = a_prob.take([
+                    Transition.M2M,
+                    Transition.M2I,
+                    Transition.M2D,
+                ])
             elif state == State.I:
-                p = [
-                    a_prob[idx][Transition.I2M.value],
+                next_transit_prob = np.array([
+                    a_prob[Transition.I2M],
                     0,
-                    0]
+                    0,
+                ])
             elif state == State.D:
-                p = [
-                    a_prob[idx][Transition.D2M.value],
+                next_transit_prob = np.array([
+                    a_prob[Transition.D2M],
                     0,
-                    a_prob[idx][Transition.D2D.value]]
+                    a_prob[Transition.D2D],
+                ])
             else:
                 raise Exception()
 
-            p[np.argmax(p)] += 1000000
-            state = np.random.choice([State.M, State.I, State.D], p=p/sum(p))
+            # update state and index
+            state = State(next_transit_prob.argmax())
             if state != State.I:
-                idx += 1
-            states.append((idx, state))
+                index += 1
+            states.append((index, state))
 
-            if idx == a_prob.shape[0]:
+            # finish with
+            if index == len(a_probs):
                 break
 
+            # update nucleotides string
             if state == State.M:
-                # logger.info("{:.2f}, {:.2f}, {:.2f}, {:.2f}".format(*self.e[idx-1]))
-                p = np.copy(e_prob[idx-1])
-                p[np.argmax(p)] += 100000
-                seq += np.random.choice(list("ATGC"), p=p/sum(p))
+                e_prob: np.ndarray = e_probs[index - 1]
+                seq += "ATGC"[e_prob.argmax()]
             elif state == State.I:
                 seq += "N"
-            else:
+            else: # equals to State.D
                 seq += "_"
+            
         sequences.append(seq)
-        state_transits.append(states)
+        states_transit.append(states)
 
-    return sequences, state_transits
+    return sequences, states_transit
+
+def draw_logo(
+    ax: Axes,
+    coord: np.ndarray, 
+    model: CNN_PHMM_VAE,
+    is_RNA: bool = True,
+    calc_h_em: bool = True,
+    correction: float = 0,
+    font_file: str = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    ) -> Axes:
+
+    assert coord.ndim == 1
+
+    red = "#d50000"
+    green = "#00d500"
+    blue = "#0000c0"
+    yellow = "#ffaa00"
+
+    if is_RNA:
+        nucleotides = list("AUGC")
+    else:
+        nucleotides = list("ATGC")
+
+    res = dict()
+    for text, color in zip(nucleotides, [green, red, yellow, blue]):
+        img = Image.new('RGBA', (200, 300), (255, 255, 255, 0))
+        font = ImageFont.truetype(font_file, size=200)
+        drawer = ImageDraw.Draw(img)
+        drawer.text((10, 10), text, fill=color, font=font)
+        img = img.crop(img.getbbox())
+        res[text] = img
+    
+    emission_probs: np.ndarray \
+        = model \
+            .decoder(torch.Tensor([coord]))[1] \
+            .detach().numpy()[0]
+    
+    e_prob_list = list()
+    for index, state in get_most_probable_seq(
+        coords = [coord],
+        model = model,
+        proba_is_log = True,
+    )[1][0]: # head of states list
+        if not 0 < index <= len(emission_probs):
+            continue
+
+        if state == State.M:
+            e_prob_list.append(np.exp(emission_probs[index - 1]))
+        elif state == State.I:
+            e_prob_list.append(np.ones((4)) * 0.25)
+
+    e_probs = np.stack(e_prob_list)
+    length = len(e_probs)
+
+    if calc_h_em:
+        p = e_probs.T
+        h = -p * np.log2(p+1e-30)
+        r = 2 - np.sum(h, axis=0, keepdims=True) - correction
+        h_em = (p * r).T
+    else:
+        h_em = e_probs
+
+    c_h = int(ax.bbox.height)
+    if calc_h_em == True:
+        ylim = 2
+    else:
+        ylim = 1
+    unit_c_h = c_h / ylim # 0 to ylim bit
+
+    c_w = int(ax.bbox.width)
+    width = c_w // len(h_em)
+
+    canvas = Image.new('RGBA', (c_w, c_h), (255, 255, 255, 0))
+    w_offset = 0
+    for a, t, g, c in h_em:
+        h_offset = 0
+        w = width
+        for i in np.argsort([a, t, g, c])[::-1]:
+            h = int(unit_c_h*[a, t, g, c][i])
+            if h != 0: # when matching rather than insertion
+                canvas.paste(
+                    res[nucleotides[i]].resize((w, h), Image.BOX),
+                    (w_offset, c_h - h_offset - h),
+                )
+            h_offset += h
+        w_offset += w
+
+    ax.imshow(np.asarray(canvas), zorder=1)
+    ax.set_xticks(np.arange(length)*width + width//2)
+    ax.set_xticklabels(1+np.arange(length))
+    ax.set_yticks(np.array([0, 0.25, 0.5, 0.75, 1]) * ylim * unit_c_h)
+    ax.set_yticklabels(np.array([1, 0.75, 0.5, 0.25, 0]) * ylim)
+    ax.xaxis.grid(False)
+
+    return ax
