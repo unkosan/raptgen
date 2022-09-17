@@ -1,6 +1,14 @@
+from pathlib import Path
 import dash
 from dash import Dash, html
 import dash_bootstrap_components as dbc
+
+from pages.util import DATA_DIR
+
+if not DATA_DIR.exists():
+    DATA_DIR.mkdir()
+    (DATA_DIR / "items").mkdir()
+    (DATA_DIR / "measured_values").mkdir()
 
 def make_navbar(pages):
     return dbc.NavbarSimple(
