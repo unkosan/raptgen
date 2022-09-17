@@ -3,6 +3,7 @@
 
 # todo: このファイルでは pHMM に関するアルゴリズムをまとめる。weblogo に関するアルゴリズムもここに集約する。
 
+from itertools import groupby
 from time import time
 from typing import Callable, List, Tuple, Union
 from matplotlib.axes import Axes
@@ -438,14 +439,17 @@ def embed_sequences(
     with torch.no_grad():
         model.eval()
         coords: List[np.ndarray] = list()
-        for sequence in sequences:
+
+        for _, group_it in groupby(sequences, len):
+            encoded_seqs: List[List[int]] = list(map(ID_encode, group_it))
             recon, mu, logvar = model(
                 torch.Tensor(
-                    [ID_encode(sequence)],
-                    device=model_device).long()
-                )
-            mu_np = mu.to('cpu').detach().numpy().copy()[0]
-            coords.append(mu_np)
+                    np.array(encoded_seqs),
+                    device=model_device
+                ).long()
+            )
+            mu_list = list(mu.to('cpu').detach().numpy().copy())
+            coords += mu_list
     
     return coords
 
