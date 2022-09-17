@@ -13,3 +13,7 @@ scripts_local/
 data/local/**
 
 logs/**
+
+visualizer/data/items/**
+visualizer/data/measured_values/**
+visualizer/data/profile_dataframe.pkl
