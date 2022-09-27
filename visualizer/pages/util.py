@@ -7,7 +7,7 @@ import pickle
 import torch
 import io
 
-DATA_DIR = "/raptgen-visualizer/visualizer/data"
+DATA_DIR = Path("/raptgen-visualizer/visualizer/data")
 
 # https://github.com/pytorch/pytorch/issues/16797
 class CPU_Unpickler(pickle.Unpickler):
