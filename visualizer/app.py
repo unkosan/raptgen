@@ -41,11 +41,11 @@ if __name__ == "__main__":
     parser.add_argument('--userID', type=str, help="username when login")
     parser.add_argument('--password', type=str, help="password when login")
     args = parser.parse_args()
-    if args.UserID != None and args.Password != None:
-        print(f"UserID: {args.UserID}")
+    if args.userID != None and args.password != None:
+        print(f"UserID: {args.userID}")
         auth = dash_auth.BasicAuth(
             app,
-            { args.UserID : args.Password },
+            { args.userID : args.password },
         )
 
     app.run_server(debug=False, host="0.0.0.0", port="8050")
