@@ -8,7 +8,7 @@ RUN apt-get clean
 EXPOSE 8065
 
 RUN git clone https://github.com/unkosan/raptgen-visualizer.git /raptgen-visualizer
-RUN git checkout unkosan/visualizer
+RUN cd raptgen-visualizer && git checkout unkosan/visualizer
 
 RUN wget https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTC/NotoSansCJK-Bold.ttc 
 RUN mkdir /usr/share/fonts/opentype/noto
