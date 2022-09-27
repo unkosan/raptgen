@@ -2,6 +2,8 @@ from pathlib import Path
 import dash
 from dash import Dash, html
 import dash_bootstrap_components as dbc
+import argparse
+import dash_auth
 
 from pages.util import DATA_DIR
 
@@ -35,4 +37,15 @@ app.layout = html.Div([
 ])
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--userID', type=str, help="username when login")
+    parser.add_argument('--password', type=str, help="password when login")
+    args = parser.parse_args()
+    if args.UserID != None and args.Password != None:
+        print(f"UserID: {args.UserID}")
+        auth = dash_auth.BasicAuth(
+            app,
+            { args.UserID : args.Password },
+        )
+
     app.run_server(debug=False, host="0.0.0.0", port="8050")
