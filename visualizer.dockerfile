@@ -5,7 +5,7 @@ RUN apt-get install -y git vim wget ghostscript
 RUN apt-get upgrade -y bash
 RUN apt-get clean
 
-EXPOSE 8065
+EXPOSE 8050
 
 RUN git clone https://github.com/unkosan/raptgen-visualizer.git /raptgen-visualizer
 RUN cd raptgen-visualizer && git checkout unkosan/visualizer
